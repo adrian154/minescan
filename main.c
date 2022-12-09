@@ -61,7 +61,7 @@ int connect_socket(int client_port, in_addr_t addr) {
     client_addr.sin_family = AF_INET;
     client_addr.sin_port = htons(client_port);
     client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if(bind(socket_fd, (struct sockaddr_in *)&client_addr, sizeof(client_addr))) {
+    if(bind(socket_fd, (struct sockaddr *)&client_addr, sizeof(client_addr))) {
         perror("bind");
         close(socket_fd);
         return -1;
@@ -103,7 +103,7 @@ int add_socket(int epoll_fd, int client_port) {
 
     struct epoll_event event;
     event.events = EPOLLIN | EPOLLOUT;
-    event.data.ptr = socket;
+    event.data.ptr = state;
     if(epoll_ctl(epoll_fd, EPOLL_CTL_ADD, socket_fd, &event) == -1) {
         perror("epoll_ctl");
         close(socket_fd);
@@ -137,7 +137,10 @@ int main(int argc, char **argv) {
 
         // Maintain a steady number of sockets by opening new ones as necessary
         if(num_tracked_fds < NUM_SOCKETS) {
-            int fd = open_socket(12345);
+            if(add_socket(epoll_fd, 12345) == -1) {
+                return 1;
+            }
+            num_tracked_fds++;
         }
 
         // watch for events
@@ -146,6 +149,7 @@ int main(int argc, char **argv) {
             perror("epoll_wait");
             return 1;
         }
+
 
         for(int i = 0; i < num_events; i++) {
 
@@ -167,9 +171,11 @@ int main(int argc, char **argv) {
                 if(state->payload_bytes_sent < sizeof(ping_payload)) {
                     int bytes_written = write(state->fd, ping_payload + state->payload_bytes_sent, sizeof(ping_payload) - state->payload_bytes_sent);
                     if(bytes_written == -1) {
-                        close(state->fd);
-                        free(state->packet_buf);
-                        free(state);
+                        if(errno != EAGAIN && errno != EWOULDBLOCK) {
+                            close(state->fd);
+                            free(state->packet_buf);
+                            free(state);
+                        }
                         continue;
                     }
                     state->payload_bytes_sent += bytes_written;
@@ -185,9 +191,11 @@ int main(int argc, char **argv) {
                        to read the entire packet length field. */
                     unsigned char buf[5];
                     int bytes_read = read(state->fd, buf, sizeof(buf));
-                    if(bytes_read == -1 && errno != EAGAIN && errno != EWOULDBLOCK) {
-                        close(state->fd);
-                        free(state);
+                    if(bytes_read == -1) {
+                        if(errno != EAGAIN && errno != EWOULDBLOCK) {
+                            close(state->fd);
+                            free(state);
+                        }
                         continue;
                     }
 
@@ -242,14 +250,17 @@ int main(int argc, char **argv) {
                 int remaining_bytes = state->packet_length - state->packet_bytes_read;
                 int bytes_read = read(state->fd, state->packet_buf + state->packet_bytes_read, remaining_bytes);
                 if(bytes_read == -1) {
-                    close(state->fd);
-                    free(state->packet_buf);
-                    free(state);
+                    if(errno != EAGAIN && errno != EWOULDBLOCK) {
+                        close(state->fd);
+                        free(state->packet_buf);
+                        free(state);
+                    }
                     continue;
                 }
                 state->packet_bytes_read += bytes_read;
 
                 if(state->packet_bytes_read == state->packet_length) {
+                    printf("no fucking way");
                     // TODO: parse
                 }
 
