@@ -61,7 +61,7 @@ int connect_socket(int client_port, in_addr_t addr) {
     client_addr.sin_family = AF_INET;
     client_addr.sin_port = htons(client_port);
     client_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if(bind(socket_fd, (struct sockaddr *)&client_addr, sizeof(client_addr))) {
+    if(bind(socket_fd, (struct sockaddr *)&client_addr, sizeof(client_addr)) == -1) {
         perror("bind");
         close(socket_fd);
         return -1;
@@ -83,7 +83,7 @@ int connect_socket(int client_port, in_addr_t addr) {
 
 int add_socket(int epoll_fd, int client_port) {
 
-    int socket_fd = connect_socket(client_port, inet_addr("192.9.150.62"));
+    int socket_fd = connect_socket(client_port, inet_addr("173.236.67.25"));
     if(socket_fd == -1) {
         return -1;
     }
@@ -156,9 +156,12 @@ int main(int argc, char **argv) {
             struct epoll_event *event = &events[i];
             struct SocketState *state = event->data.ptr;
 
+            printf("event: %d", event->events);
+
             /* If an error occurred or the server closed the connection, we 
                can remove the socket. */
             if(event->events & EPOLLERR || event->events & EPOLLHUP) {
+                printf("oh no! killing...");
                 close(state->fd);
                 free(state->packet_buf);
                 free(state);
@@ -168,6 +171,7 @@ int main(int argc, char **argv) {
             /* If we can write to the socket, check if there is data that needs
                to be sent. */
             if(event->events & EPOLLOUT) {
+                printf("writing");
                 if(state->payload_bytes_sent < sizeof(ping_payload)) {
                     int bytes_written = write(state->fd, ping_payload + state->payload_bytes_sent, sizeof(ping_payload) - state->payload_bytes_sent);
                     if(bytes_written == -1) {
@@ -184,6 +188,8 @@ int main(int argc, char **argv) {
 
             /* Read packet from socket. */
             if(event->events & EPOLLIN) {
+
+                printf("reading");
 
                 if(state->packet_buf == NULL) {
 
