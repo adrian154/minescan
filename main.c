@@ -1,10 +1,11 @@
-#include <arpa/inet.h>
+#include "sqlite/sqlite3.h"
 #include <sys/socket.h>
+#include <arpa/inet.h>
 #include <sys/epoll.h>
-#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 #include <stdio.h>
 
 struct SocketState {
@@ -27,7 +28,7 @@ const unsigned char ping_payload[] = {
     0x01, // next state (1 = querying server status)
     
     0x01, // packet length
-    0x00, // packet ID (0 = request status)
+    0x00  // packet ID (0 = request status)
 
 };
 
@@ -82,7 +83,7 @@ int connect_socket(int client_port, in_addr_t addr) {
 
 }
 
-int add_socket(int epoll_fd, int client_port, char *addrstr) {
+int add_socket(int epoll_fd, int client_port, char *addrstr, int *num_tracked_fds) {
 
     in_addr_t addr = inet_addr(addrstr);
     int socket_fd = connect_socket(client_port, addr);
@@ -114,6 +115,7 @@ int add_socket(int epoll_fd, int client_port, char *addrstr) {
         return -1;
     }
 
+    (*num_tracked_fds)++;
     return 0;
 
 }
@@ -166,10 +168,9 @@ int main(int argc, char **argv) {
 
         // Maintain a steady number of sockets by opening new ones as necessary
         if(num_tracked_fds == 0) {
-            if(add_socket(epoll_fd, 12345, argv[1]) == -1) {
+            if(add_socket(epoll_fd, 12345, argv[1], &num_tracked_fds) == -1) {
                 return 1;
             }
-            num_tracked_fds++;
         }
 
         // watch for events
