@@ -137,6 +137,13 @@ void parse_packet(struct SocketState *state) {
 
 }
 
+void close_socket(struct SocketState *state, int *num_tracked_fds) {
+    close(state->fd);
+    (*num_tracked_fds)--;
+    free(state->packet_buf);
+    free(state);
+}
+
 int main(int argc, char **argv) {
 
     // create epoll
@@ -181,10 +188,7 @@ int main(int argc, char **argv) {
             /* If an error occurred or the server closed the connection, we 
                can remove the socket. */
             if(event->events & EPOLLERR) {
-                printf("oh no! killing...");
-                close(state->fd);
-                free(state->packet_buf);
-                free(state);
+                close_socket(state, &num_tracked_fds);
                 continue;
             }
 
@@ -195,9 +199,7 @@ int main(int argc, char **argv) {
                     int bytes_written = write(state->fd, ping_payload + state->payload_bytes_sent, sizeof(ping_payload) - state->payload_bytes_sent);
                     if(bytes_written == -1) {
                         if(errno != EAGAIN && errno != EWOULDBLOCK) {
-                            close(state->fd);
-                            free(state->packet_buf);
-                            free(state);
+                            close_socket(state, &num_tracked_fds);
                         }
                         continue;
                     }
@@ -216,8 +218,7 @@ int main(int argc, char **argv) {
                     int bytes_read = read(state->fd, buf, sizeof(buf));
                     if(bytes_read == -1) {
                         if(errno != EAGAIN && errno != EWOULDBLOCK) {
-                            close(state->fd);
-                            free(state);
+                            close_socket(state, &num_tracked_fds);
                         }
                         continue;
                     }
@@ -239,24 +240,21 @@ int main(int argc, char **argv) {
                         
                         // VarInts are never longer than 5 bytes
                         if(pos > 5) {
-                            close(state->fd);
-                            free(state);
+                            close_socket(state, &num_tracked_fds);
                             continue;
                         }
 
                     }
 
                     if(packet_length == 0 || packet_length > MAX_RESPONSE_SIZE) {
-                        close(state->fd);
-                        free(state);
+                        close_socket(state, &num_tracked_fds);
                         continue;
                     }
 
                     state->packet_length = packet_length;
                     state->packet_buf = malloc(packet_length);
                     if(state->packet_buf == NULL) {
-                        close(state->fd);
-                        free(state);
+                        close_socket(state, &num_tracked_fds);
                         continue;
                     }
 
@@ -274,9 +272,7 @@ int main(int argc, char **argv) {
                 int bytes_read = read(state->fd, state->packet_buf + state->packet_bytes_read, remaining_bytes);
                 if(bytes_read == -1) {
                     if(errno != EAGAIN && errno != EWOULDBLOCK) {
-                        close(state->fd);
-                        free(state->packet_buf);
-                        free(state);
+                         close_socket(state, &num_tracked_fds);
                     }
                     continue;
                 }
@@ -284,18 +280,14 @@ int main(int argc, char **argv) {
 
                 if(state->packet_bytes_read == state->packet_length) {
                     parse_packet(state);
-                    close(state->fd);
-                    free(state->packet_buf);
-                    free(state);
+                    close_socket(state, &num_tracked_fds);
                     continue;
                 }
 
             }
 
             if(event->events & EPOLLHUP) {
-                close(state->fd);
-                free(state->packet_buf);
-                free(state);
+                close_socket(state, &num_tracked_fds);
             }
 
         }
