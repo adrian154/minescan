@@ -35,7 +35,7 @@ const unsigned char ping_payload[] = {
 #define EPOLL_MAX_EVENTS 64
 
 // Reject suspiciously long responses
-#define MAX_RESPONSE_SIZE 1073741824
+#define MAX_RESPONSE_SIZE 65536
 
 // Number of sockets to open at a time
 #define NUM_SOCKETS 10
@@ -123,49 +123,16 @@ void parse_packet(struct SocketState *state) {
     char addr_str[32];
     inet_ntop(AF_INET, &state->addr, addr_str, 32);
 
-    printf("parsing %s\n", addr_str);
-    fflush(stdout);
-
-    if(state->packet_length < 16) {
-        printf("received a suspiciously short packet from %s: ", addr_str);
-        for(int i = 0; i < state->packet_length; i++) {
-            printf("%02x ", state->packet_buf[i]);
-        }
-        putchar('\n');
-        return;
-    }
-
-    unsigned char *data = state->packet_buf;
-
-    // check packet ID
-    if(data[0] != 0x00) {
-        printf("packet id is %d not 0\n", data[0]);
-        return;
-    }
-
-    // skip the data length field
-    int pos = 1;
-    while(1) {
-        
-        if(data[pos] & 0x80) {
-            pos++;
-        } else {
+    // find opening brace
+    int start_pos;
+    for(start_pos = 0; start_pos < state->packet_length; start_pos++) {
+        if(state->packet_buf[start_pos] == '{') {
             break;
         }
-        
-        // VarInt too long
-        if(pos > 5) {
-            printf("varint too long\n");
-            return;
-        }
-
     }
 
-    for(int i = pos; i < state->packet_length; i++) {
-        putchar(state->packet_buf[i]);
-    }
-
-    printf("thats all folks");
+    int length = state->packet_length - start_pos;
+    printf("%s: %.*s", addr_str, length, state->packet_buf + start_pos);
     fflush(stdout);
 
 }
@@ -211,8 +178,6 @@ int main(int argc, char **argv) {
             struct epoll_event *event = &events[i];
             struct SocketState *state = event->data.ptr;
 
-            printf("event: %d\n", event->events);
-
             /* If an error occurred or the server closed the connection, we 
                can remove the socket. */
             if(event->events & EPOLLERR) {
@@ -230,7 +195,6 @@ int main(int argc, char **argv) {
                     int bytes_written = write(state->fd, ping_payload + state->payload_bytes_sent, sizeof(ping_payload) - state->payload_bytes_sent);
                     if(bytes_written == -1) {
                         if(errno != EAGAIN && errno != EWOULDBLOCK) {
-                             printf("write failed");
                             close(state->fd);
                             free(state->packet_buf);
                             free(state);
@@ -252,7 +216,6 @@ int main(int argc, char **argv) {
                     int bytes_read = read(state->fd, buf, sizeof(buf));
                     if(bytes_read == -1) {
                         if(errno != EAGAIN && errno != EWOULDBLOCK) {
-                             printf("read failed (packetlen)");
                             close(state->fd);
                             free(state);
                         }
@@ -276,7 +239,6 @@ int main(int argc, char **argv) {
                         
                         // VarInts are never longer than 5 bytes
                         if(pos > 5) {
-                             printf("varint too long");
                             close(state->fd);
                             free(state);
                             continue;
@@ -285,7 +247,6 @@ int main(int argc, char **argv) {
                     }
 
                     if(packet_length == 0 || packet_length > MAX_RESPONSE_SIZE) {
-                         printf("bad packet length");
                         close(state->fd);
                         free(state);
                         continue;
@@ -294,7 +255,6 @@ int main(int argc, char **argv) {
                     state->packet_length = packet_length;
                     state->packet_buf = malloc(packet_length);
                     if(state->packet_buf == NULL) {
-                        fprintf(stderr, "failed to allocate packet buffer");
                         close(state->fd);
                         free(state);
                         continue;
@@ -314,7 +274,6 @@ int main(int argc, char **argv) {
                 int bytes_read = read(state->fd, state->packet_buf + state->packet_bytes_read, remaining_bytes);
                 if(bytes_read == -1) {
                     if(errno != EAGAIN && errno != EWOULDBLOCK) {
-                        printf("read failed");
                         close(state->fd);
                         free(state->packet_buf);
                         free(state);
@@ -323,7 +282,6 @@ int main(int argc, char **argv) {
                 }
                 state->packet_bytes_read += bytes_read;
 
-                printf("%d of %d read\n", state->packet_bytes_read, state->packet_length);
                 if(state->packet_bytes_read == state->packet_length) {
                     parse_packet(state);
                     close(state->fd);
@@ -335,7 +293,6 @@ int main(int argc, char **argv) {
             }
 
             if(event->events & EPOLLHUP) {
-                printf("hangup, bye bye\n");
                 close(state->fd);
                 free(state->packet_buf);
                 free(state);
