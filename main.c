@@ -7,12 +7,13 @@
 #include <unistd.h>
 #include <errno.h>
 #include <stdio.h>
+#include <time.h>
 
 struct SocketState {
     int fd;
     in_addr_t addr;
     int payload_bytes_sent;
-    unsigned char *packet_buf;
+    char *packet_buf;
     int packet_bytes_read;
     int packet_length;
 };
@@ -32,7 +33,7 @@ const unsigned char ping_payload[] = {
 
 };
 
-// Maximum number of epoll events that we try to process simultaneously.
+// Maximum number of epoll events that we try to process simultaneously
 #define EPOLL_MAX_EVENTS 64
 
 // Reject suspiciously long responses
@@ -40,6 +41,37 @@ const unsigned char ping_payload[] = {
 
 // Number of sockets to open at a time
 #define NUM_SOCKETS 10
+
+int setup_db(sqlite3 **db, sqlite3_stmt **stmt) {
+    
+    // set up sqlite3 database
+    int result = sqlite3_open("results.db", db);
+    if(result != SQLITE_OK) {
+        fprintf(stderr, "failed to open database: %s\n", sqlite3_errstr(result));
+        sqlite3_close(*db);
+        return -1;
+    }
+
+    // create table
+    const char *create_table_query = "CREATE TABLE IF NOT EXISTS servers (address TEXT NOT NULL PRIMARY KEY, timestamp INTEGER NOT NULL, response TEXT NOT NULL)";
+    char *err_msg;
+    result = sqlite3_exec(*db, create_table_query, NULL, NULL, &err_msg);
+    if(result != SQLITE_OK) {
+        fprintf(stderr, "failed to create table: %s\n", err_msg);
+        sqlite3_close(*db);
+        return -1;
+    }
+
+    // prepare statement
+    const char *insert_query = "INSERT INTO servers (address, timestamp, response) VALUES (?, ?, ?)";
+    result = sqlite3_prepare_v2(*db, insert_query, -1, stmt, NULL);
+    if(result != SQLITE_OK) {
+        fprintf(stderr, "failed to prepare statement: %s\n", sqlite3_errmsg(*db));
+    }
+
+    return 0;
+    
+}
 
 /* Because all of our sockets are connected to different addresses, we can
    reuse the same outgoing port for all of them. This prevents issues with
@@ -49,7 +81,7 @@ int connect_socket(int client_port, in_addr_t addr) {
     int socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
     if(socket_fd == -1) {
         perror("socket");
-        return 1;
+        return -1;
     }
 
     int optval = 1;
@@ -93,7 +125,7 @@ int add_socket(int epoll_fd, int client_port, char *addrstr, int *num_tracked_fd
 
     struct SocketState *state = malloc(sizeof(struct SocketState));
     if(state == NULL) {
-        fprintf(stderr, "failed to allocate socket state");
+        fprintf(stderr, "failed to allocate socket state\n");
         close(socket_fd);
         return -1;
     }
@@ -120,7 +152,7 @@ int add_socket(int epoll_fd, int client_port, char *addrstr, int *num_tracked_fd
 
 }
 
-void parse_packet(struct SocketState *state) {
+void parse_packet(struct SocketState *state, sqlite3_stmt *stmt) {
 
     char addr_str[32];
     inet_ntop(AF_INET, &state->addr, addr_str, 32);
@@ -134,8 +166,18 @@ void parse_packet(struct SocketState *state) {
     }
 
     int length = state->packet_length - start_pos;
-    printf("%s: %.*s", addr_str, length, state->packet_buf + start_pos);
-    fflush(stdout);
+
+    // FIXME: Check bind calls for errors
+    sqlite3_bind_text(stmt, 1, addr_str,  -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 2, time(NULL));
+    sqlite3_bind_text(stmt, 3, state->packet_buf + start_pos, length, SQLITE_TRANSIENT);
+    int result = sqlite3_step(stmt);
+    if(result != SQLITE_DONE) {
+        fprintf(stderr, "failed to insert result for %s: %s\n", addr_str, sqlite3_errstr(result));
+    }
+
+    sqlite3_reset(stmt);
+
 
 }
 
@@ -148,6 +190,12 @@ void close_socket(struct SocketState *state, int *num_tracked_fds) {
 
 int main(int argc, char **argv) {
 
+    sqlite3 *db;
+    sqlite3_stmt *stmt;
+    if(setup_db(&db, &stmt) == -1) {
+        return 1;
+    }
+
     // create epoll
     int epoll_fd = epoll_create1(0);
     if(epoll_fd == -1) {
@@ -157,7 +205,7 @@ int main(int argc, char **argv) {
 
     struct epoll_event *events = malloc(EPOLL_MAX_EVENTS);
     if(events == NULL) {
-        fprintf(stderr, "failed to allocate events array");
+        fprintf(stderr, "failed to allocate events array\n");
         return 1;
     }
 
@@ -216,7 +264,7 @@ int main(int argc, char **argv) {
                     /* Assume that we will never need more than one read() call
                        to read the entire packet length field. */
                     unsigned char buf[5];
-                    int bytes_read = read(state->fd, buf, sizeof(buf));
+                    int bytes_read = read(state->fd, buf, 5);
                     if(bytes_read == -1) {
                         if(errno != EAGAIN && errno != EWOULDBLOCK) {
                             close_socket(state, &num_tracked_fds);
@@ -280,7 +328,7 @@ int main(int argc, char **argv) {
                 state->packet_bytes_read += bytes_read;
 
                 if(state->packet_bytes_read == state->packet_length) {
-                    parse_packet(state);
+                    parse_packet(state, stmt);
                     close_socket(state, &num_tracked_fds);
                     continue;
                 }
@@ -295,11 +343,9 @@ int main(int argc, char **argv) {
 
     } while(num_tracked_fds > 0);
 
-    // close epoll
-    if(close(epoll_fd)) {
-        perror("close");
-        return 1;
-    }
+    close(epoll_fd);
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
 
     return 0;
 
