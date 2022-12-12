@@ -53,7 +53,7 @@ int setup_db(sqlite3 **db, sqlite3_stmt **stmt) {
     }
 
     // create table
-    const char *create_table_query = "CREATE TABLE IF NOT EXISTS servers (address TEXT NOT NULL PRIMARY KEY, timestamp INTEGER NOT NULL, response TEXT NOT NULL)";
+    const char *create_table_query = "CREATE TABLE IF NOT EXISTS servers (address TEXT NOT NULL, timestamp INTEGER NOT NULL, response TEXT NOT NULL)";
     char *err_msg;
     result = sqlite3_exec(*db, create_table_query, NULL, NULL, &err_msg);
     if(result != SQLITE_OK) {
@@ -203,7 +203,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    struct epoll_event *events = malloc(EPOLL_MAX_EVENTS);
+    struct epoll_event *events = malloc(EPOLL_MAX_EVENTS * sizeof(struct epoll_event));
     if(events == NULL) {
         fprintf(stderr, "failed to allocate events array\n");
         return 1;
@@ -216,8 +216,12 @@ int main(int argc, char **argv) {
 
         // Maintain a steady number of sockets by opening new ones as necessary
         if(num_tracked_fds == 0) {
-            if(add_socket(epoll_fd, 12345, argv[1], &num_tracked_fds) == -1) {
-                return 1;
+            for(int i = 0; i < 255; i++) {
+                char buf[32];
+                sprintf(buf, "23.156.128.%d", i);
+                if(add_socket(epoll_fd, 12347, buf, &num_tracked_fds) == -1) {
+                    return 1;
+                }
             }
         }
 
@@ -227,7 +231,6 @@ int main(int argc, char **argv) {
             perror("epoll_wait");
             return 1;
         }
-
 
         for(int i = 0; i < num_events; i++) {
 
