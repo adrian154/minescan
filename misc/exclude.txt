@@ -1,0 +1,40 @@
+# "This" network
+0.0.0.0/8 
+
+# Private ranges
+10.0.0.0/8
+192.168.0.0/16
+172.16.0.0/12
+
+# Protocol assignments (DS-Lite, NAT64, DNS64)
+192.0.0.0/24
+
+# CGNAT shared address space
+100.64.0.0/10
+
+# Host loopback
+127.0.0.0/8
+
+# Link-local addresses
+169.254.0.0/16
+
+# Documentation/testing
+192.0.2.0/24
+198.51.100.0/24
+203.0.113.0/24
+233.252.0.0/24
+
+# 6to4
+192.88.99.0/24
+
+# Benchmarking
+198.18.0.0/15
+
+# Multicast
+224.0.0.0/4
+
+# Reserved
+240.0.0.0/4
+
+# Broadcast
+255.255.255.255/32

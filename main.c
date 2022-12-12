@@ -212,18 +212,19 @@ int main(int argc, char **argv) {
     // We need to manually track the number of watched sockets
     int num_tracked_fds = 0;
 
+    struct AddrGenState addr_gen;
+    addr_gen.state = 0;
+
     do {
 
         // Maintain a steady number of sockets by opening new ones as necessary
-        if(num_tracked_fds == 0) {
-            for(int i = 0; i < 255; i++) {
-                char buf[32];
-                sprintf(buf, "23.156.128.%d", i);
-                if(add_socket(epoll_fd, 12347, buf, &num_tracked_fds) == -1) {
-                    return 1;
-                }
-            }
-        }
+        //if(num_tracked_fds < ) {
+
+                //if(add_socket(epoll_fd, 12347, buf, &num_tracked_fds) == -1) {
+//                    return 1;
+  //              }
+
+    //     }
 
         // watch for events
         int num_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
