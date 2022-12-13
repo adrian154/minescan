@@ -110,7 +110,7 @@ int connect_socket(int client_port, in_addr_t addr) {
         if(errno != ENETUNREACH) {
             char buf[32];
             inet_ntop(AF_INET, &addr, buf, 32);
-            printf("(address %s) ", buf);
+            fprintf(stderr, "(address %s) ", buf);
             perror("connect");
         }
         close(socket_fd);
