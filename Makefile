@@ -1,6 +1,6 @@
-OBJS := bin/main.o bin/addr-gen.o
+OBJS := bin/main.o bin/addr-gen.o bin/sqlite3/sqlite3.o
 
-bin/minescan: $(OBJS) bin/sqlite3.o
+bin/minescan: $(OBJS)
 	gcc $^ -o $@ -g
 
 bin/sqlite3/sqlite3.o: sqlite/sqlite3.c
