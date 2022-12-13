@@ -10,6 +10,7 @@ struct AddressGenerator {
     bool finished;
 };
 
+int should_exclude(uint32_t addr);
 in_addr_t next_address(struct AddressGenerator *addr_gen);
 
 #endif

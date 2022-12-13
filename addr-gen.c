@@ -1,5 +1,7 @@
 #include "addr-gen.h"
 
+#define ADDRGEN_INITIAL_STATE 0
+
 // Each excluded subnet is encoded as the address followed by the subnet mask.
 const uint32_t excluded_subnets[] = {
     0, 4278190080,
@@ -18,6 +20,11 @@ const uint32_t excluded_subnets[] = {
     4026531840, 4026531840,
     4294967295, 0
 };
+
+void init_addrgen(struct AddressGenerator *addr_gen) {
+    addr_gen->finished = false;
+    addr_gen->state = ADDRGEN_INITIAL_STATE;
+}
 
 int should_exclude(uint32_t addr) {
     for(int i = 0; i < 15; i += 2) {
@@ -43,9 +50,10 @@ in_addr_t next_address(struct AddressGenerator *addr_gen) {
     
     } while(should_exclude(addr_gen->state));
 
-    if(addr_gen->state == 0) {
+    if(addr_gen->state == ADDRGEN_INTIIAL_STATE) {
         addr_gen->finished = true;
     }
+
     return htonl(addr_gen->state);
 
 }

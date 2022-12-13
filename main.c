@@ -220,8 +220,7 @@ int main(int argc, char **argv) {
     int num_tracked_fds = 0;
 
     struct AddressGenerator addr_gen;
-    addr_gen.state = 0;
-    addr_gen.finished = false;
+    init_addrgen(&addr_gen);
 
     do {
 
