@@ -15,3 +15,7 @@ Reducing the number of SYN retries will also increase the number of hosts scanne
 ```
 sysctl -w net.ipv4.tcp_syn_retries=1
 ```
+
+# Why?
+
+Doing things through the kernel instead of using userspace networking (like [masscan](https://github.com/robertdavidgraham/masscan)) is objectively inferior&mdash;I made this project purely to get more familiar with epoll. It actually works surprisingly well though.
