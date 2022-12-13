@@ -162,8 +162,6 @@ void parse_packet(struct SocketState *state, sqlite3_stmt *stmt) {
     char addr_str[32];
     inet_ntop(AF_INET, &state->addr, addr_str, 32);
 
-    printf("found a server on %s\n", addr_str);
-
     // find opening brace
     int start_pos;
     for(start_pos = 0; start_pos < state->packet_length; start_pos++) {
@@ -173,6 +171,11 @@ void parse_packet(struct SocketState *state, sqlite3_stmt *stmt) {
     }
 
     int length = state->packet_length - start_pos;
+    if(length == 0) {
+        return;
+    }
+
+    printf("found a server on %s\n", addr_str);
 
     // FIXME: Check bind calls for errors
     sqlite3_bind_text(stmt, 1, addr_str,  -1, SQLITE_TRANSIENT);
