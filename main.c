@@ -108,6 +108,9 @@ int connect_socket(int client_port, in_addr_t addr) {
     server_addr.sin_addr.s_addr = addr;
     if(connect(socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1 && errno != EINPROGRESS) {
         if(errno != ENETUNREACH) {
+            char buf[32];
+            inet_ntop(AF_INET, &addr, buf, 32);
+            printf("(address %s) ", buf);
             perror("connect");
         }
         close(socket_fd);
