@@ -50,7 +50,7 @@ in_addr_t next_address(struct AddressGenerator *addr_gen) {
     
     } while(should_exclude(addr_gen->state));
 
-    if(addr_gen->state == ADDRGEN_INTIIAL_STATE) {
+    if(addr_gen->state == ADDRGEN_INITIAL_STATE) {
         addr_gen->finished = true;
     }
 
