@@ -2,6 +2,7 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/epoll.h>
+#include "addr-gen.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -40,7 +41,7 @@ const unsigned char ping_payload[] = {
 #define MAX_RESPONSE_SIZE 65536
 
 // Number of sockets to open at a time
-#define NUM_SOCKETS 10
+#define MAX_SOCKETS 4000
 
 int setup_db(sqlite3 **db, sqlite3_stmt **stmt) {
     
@@ -106,7 +107,9 @@ int connect_socket(int client_port, in_addr_t addr) {
     server_addr.sin_port = htons(25565);
     server_addr.sin_addr.s_addr = addr;
     if(connect(socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1 && errno != EINPROGRESS) {
-        perror("connect");
+        if(errno != ENETUNREACH) {
+            perror("connect");
+        }
         close(socket_fd);
         return -1;
     }
@@ -115,9 +118,8 @@ int connect_socket(int client_port, in_addr_t addr) {
 
 }
 
-int add_socket(int epoll_fd, int client_port, char *addrstr, int *num_tracked_fds) {
+int add_socket(int epoll_fd, int client_port, in_addr_t addr, int *num_tracked_fds) {
 
-    in_addr_t addr = inet_addr(addrstr);
     int socket_fd = connect_socket(client_port, addr);
     if(socket_fd == -1) {
         return -1;
@@ -156,6 +158,8 @@ void parse_packet(struct SocketState *state, sqlite3_stmt *stmt) {
 
     char addr_str[32];
     inet_ntop(AF_INET, &state->addr, addr_str, 32);
+
+    printf("found a server on %s\n", addr_str);
 
     // find opening brace
     int start_pos;
@@ -212,19 +216,21 @@ int main(int argc, char **argv) {
     // We need to manually track the number of watched sockets
     int num_tracked_fds = 0;
 
-    struct AddrGenState addr_gen;
+    struct AddressGenerator addr_gen;
     addr_gen.state = 0;
+    addr_gen.finished = false;
 
     do {
 
-        // Maintain a steady number of sockets by opening new ones as necessary
-        //if(num_tracked_fds < ) {
-
-                //if(add_socket(epoll_fd, 12347, buf, &num_tracked_fds) == -1) {
-//                    return 1;
-  //              }
-
-    //     }
+        for(int i = num_tracked_fds; i < MAX_SOCKETS; i++) {
+            in_addr_t addr = next_address(&addr_gen);
+            if(addr == 0) {
+                break;
+            }
+            if(add_socket(epoll_fd, 12345, addr, &num_tracked_fds) == -1) {
+                continue;
+            }
+        }
 
         // watch for events
         int num_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
