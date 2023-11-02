@@ -221,7 +221,6 @@ int main(void) {
     if(init_addrgen(&addr_gen)) {
         return 1;
     }
-    return 0;
 
     do {
 
