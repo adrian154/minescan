@@ -37,11 +37,14 @@ const unsigned char ping_payload[] = {
 // Maximum number of epoll events that we try to process simultaneously
 #define EPOLL_MAX_EVENTS 64
 
-// Reject suspiciously long responses
+// Limit on response size from server
 #define MAX_RESPONSE_SIZE 65536
 
 // Number of sockets to open at a time
 #define MAX_SOCKETS 4000
+
+// Client port used for outgoing connections
+#define CLIENT_PORT 12345
 
 int setup_db(sqlite3 **db, sqlite3_stmt **stmt) {
     
@@ -50,7 +53,7 @@ int setup_db(sqlite3 **db, sqlite3_stmt **stmt) {
     if(result != SQLITE_OK) {
         fprintf(stderr, "failed to open database: %s\n", sqlite3_errstr(result));
         sqlite3_close(*db);
-        return -1;
+        return 1;
     }
 
     // create table
@@ -60,10 +63,10 @@ int setup_db(sqlite3 **db, sqlite3_stmt **stmt) {
     if(result != SQLITE_OK) {
         fprintf(stderr, "failed to create table: %s\n", err_msg);
         sqlite3_close(*db);
-        return -1;
+        return 1;
     }
 
-    // prepare statement
+    // prepare insert statement
     const char *insert_query = "INSERT INTO servers (address, timestamp, response) VALUES (?, ?, ?)";
     result = sqlite3_prepare_v2(*db, insert_query, -1, stmt, NULL);
     if(result != SQLITE_OK) {
@@ -74,9 +77,6 @@ int setup_db(sqlite3 **db, sqlite3_stmt **stmt) {
     
 }
 
-/* Because all of our sockets are connected to different addresses, we can
-   reuse the same outgoing port for all of them. This prevents issues with
-   ephemeral port exhaustion. */
 int connect_socket(int client_port, in_addr_t addr) {
     
     int socket_fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
@@ -85,6 +85,7 @@ int connect_socket(int client_port, in_addr_t addr) {
         return -1;
     }
 
+    // To avoid ephemeral port exhaustion, reuse the same client port for all outgoing connections (this works because each connection is to a different IP)
     int optval = 1;
     if(setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1) {
         perror("setsockopt");
@@ -125,14 +126,14 @@ int add_socket(int epoll_fd, int client_port, in_addr_t addr, int *num_tracked_f
 
     int socket_fd = connect_socket(client_port, addr);
     if(socket_fd == -1) {
-        return -1;
+        return 1;
     }
 
     struct SocketState *state = malloc(sizeof(struct SocketState));
     if(state == NULL) {
         fprintf(stderr, "failed to allocate socket state\n");
         close(socket_fd);
-        return -1;
+        return 1;
     }
 
     state->fd = socket_fd;
@@ -149,7 +150,7 @@ int add_socket(int epoll_fd, int client_port, in_addr_t addr, int *num_tracked_f
         perror("epoll_ctl");
         close(socket_fd);
         free(state);
-        return -1;
+        return 1;
     }
 
     (*num_tracked_fds)++;
@@ -163,11 +164,9 @@ void parse_packet(struct SocketState *state, sqlite3_stmt *stmt) {
     inet_ntop(AF_INET, &state->addr, addr_str, 32);
 
     // find opening brace
-    int start_pos;
-    for(start_pos = 0; start_pos < state->packet_length; start_pos++) {
-        if(state->packet_buf[start_pos] == '{') {
-            break;
-        }
+    int start_pos = 0;
+    while(start_pos < state->packet_length && state->packet_buf[start_pos] != '{') {
+        start_pos++;
     }
 
     int length = state->packet_length - start_pos;
@@ -188,7 +187,6 @@ void parse_packet(struct SocketState *state, sqlite3_stmt *stmt) {
 
     sqlite3_reset(stmt);
 
-
 }
 
 void close_socket(struct SocketState *state, int *num_tracked_fds) {
@@ -198,49 +196,51 @@ void close_socket(struct SocketState *state, int *num_tracked_fds) {
     free(state);
 }
 
-int main(int argc, char **argv) {
+int main(void) {
 
     sqlite3 *db;
     sqlite3_stmt *stmt;
-    if(setup_db(&db, &stmt) == -1) {
+    if(setup_db(&db, &stmt)) {
         return 1;
     }
 
-    // create epoll
+    // Create epoll
     int epoll_fd = epoll_create1(0);
     if(epoll_fd == -1) {
         perror("epoll_create1");
+        sqlite3_close(db);
         return 1;
     }
 
     struct epoll_event *events = malloc(EPOLL_MAX_EVENTS * sizeof(struct epoll_event));
-    if(events == NULL) {
-        fprintf(stderr, "failed to allocate events array\n");
-        return 1;
-    }
 
-    // We need to manually track the number of watched sockets
+    // Keep track of how many sockets are currently watched
     int num_tracked_fds = 0;
 
     struct AddressGenerator addr_gen;
-    init_addrgen(&addr_gen);
+    if(init_addrgen(&addr_gen)) {
+        return 1;
+    }
+    return 0;
 
     do {
 
+        // Open new sockets as necessary
         for(int i = num_tracked_fds; i < MAX_SOCKETS; i++) {
             in_addr_t addr = next_address(&addr_gen);
             if(addr == 0) {
                 break;
             }
-            if(add_socket(epoll_fd, 12345, addr, &num_tracked_fds) == -1) {
+            if(add_socket(epoll_fd, CLIENT_PORT, addr, &num_tracked_fds)) {
                 continue;
             }
         }
 
-        // watch for events
+        // Wait for events to arrive
         int num_events = epoll_wait(epoll_fd, events, EPOLL_MAX_EVENTS, -1);
         if(num_events == -1) {
             perror("epoll_wait");
+            sqlite3_close(db);
             return 1;
         }
 
@@ -249,15 +249,13 @@ int main(int argc, char **argv) {
             struct epoll_event *event = &events[i];
             struct SocketState *state = event->data.ptr;
 
-            /* If an error occurred or the server closed the connection, we 
-               can remove the socket. */
+            // If an error occurred or the server closed the connection, remove the socket
             if(event->events & EPOLLERR) {
                 close_socket(state, &num_tracked_fds);
                 continue;
             }
 
-            /* If we can write to the socket, check if there is data that needs
-               to be sent. */
+            // If socket is writable, check if there is data to be written
             if(event->events & EPOLLOUT) {
                 if(state->payload_bytes_sent < sizeof(ping_payload)) {
                     int bytes_written = write(state->fd, ping_payload + state->payload_bytes_sent, sizeof(ping_payload) - state->payload_bytes_sent);
@@ -271,29 +269,25 @@ int main(int argc, char **argv) {
                 }
             }
 
-            /* Read packet from socket. */
+            // Read data if socket is readable
             if(event->events & EPOLLIN) {
 
                 if(state->packet_buf == NULL) {
 
-                    /* Assume that we will never need more than one read() call
-                       to read the entire packet length field. */
-                    unsigned char buf[5];
-                    int bytes_read = read(state->fd, buf, 5);
-                    if(bytes_read == -1) {
-                        if(errno != EAGAIN && errno != EWOULDBLOCK) {
-                            close_socket(state, &num_tracked_fds);
-                        }
+                    // We assume that we will never need more than one read() call to read the entire packet length field
+                    unsigned char packetlen_buf[5];
+                    int bytes_read = read(state->fd, packetlen_buf, 5);
+                    if(bytes_read != 5) {
+                        close_socket(state, &num_tracked_fds);
                         continue;
                     }
 
-                    /* Packet length is encoded as a variable length integer
-                       where the MSB indicates whether there are more bits. */
+                    // Packet length is encoded as a variable length integer where the MSB indicates whether there are more bits.
                     unsigned long packet_length = 0;
                     int pos = 0;
-                    while(pos < bytes_read) {
+                    while(1) {
 
-                        unsigned char byte = buf[pos];
+                        unsigned char byte = packetlen_buf[pos];
                         packet_length |= (byte & 0x7f) << (pos * 7);
                         pos++;
 
@@ -301,7 +295,6 @@ int main(int argc, char **argv) {
                             break;
                         }
 
-                        
                         // VarInts are never longer than 5 bytes
                         if(pos > 5) {
                             close_socket(state, &num_tracked_fds);
@@ -310,6 +303,7 @@ int main(int argc, char **argv) {
 
                     }
 
+                    // Reject packets with nonsense packet length
                     if(packet_length == 0 || packet_length > MAX_RESPONSE_SIZE) {
                         close_socket(state, &num_tracked_fds);
                         continue;
@@ -318,15 +312,13 @@ int main(int argc, char **argv) {
                     state->packet_length = packet_length;
                     state->packet_buf = malloc(packet_length);
                     if(state->packet_buf == NULL) {
-                        close_socket(state, &num_tracked_fds);
-                        continue;
+                        fprintf(stderr, "failed to allocate response buffer\n");
+                        return 1; // OOM
                     }
 
-                    /* We'll probably accidentally read some bytes that aren't
-                       part of the packet length; copy these to the packet
-                       buffer. */
+                    // The earlier read() call probably read some bytes of the packet body along with the packet length field, copy these to the packet buffer
                     for(int i = pos; i < 5; i++) {
-                        state->packet_buf[i - pos] = buf[i];
+                        state->packet_buf[i - pos] = packetlen_buf[i];
                     }
                     state->packet_bytes_read += 5 - pos;
 
@@ -335,9 +327,7 @@ int main(int argc, char **argv) {
                 int remaining_bytes = state->packet_length - state->packet_bytes_read;
                 int bytes_read = read(state->fd, state->packet_buf + state->packet_bytes_read, remaining_bytes);
                 if(bytes_read == -1) {
-                    if(errno != EAGAIN && errno != EWOULDBLOCK) {
-                         close_socket(state, &num_tracked_fds);
-                    }
+                    close_socket(state, &num_tracked_fds);
                     continue;
                 }
                 state->packet_bytes_read += bytes_read;

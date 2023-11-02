@@ -1,34 +1,48 @@
 #include "addr-gen.h"
+#include <stdlib.h>
+#include <stdio.h>
 
-#define ADDRGEN_INITIAL_STATE 0
+int init_addrgen(struct AddressGenerator *addr_gen) {
 
-// Each excluded subnet is encoded as the address followed by the subnet mask.
-const uint32_t excluded_subnets[] = {
-    0, 4278190080,
-    167772160, 4278190080,
-    2886729728, 4293918720,
-    3232235520, 4294901760,
-    1681915904, 4290772992,
-    2130706432, 4278190080,
-    2851995648, 4294901760,
-    3221225472, 4294967040,
-    3221225984, 4294967040,
-    3325256704, 4294967040,
-    3405803776, 4294967040,
-    3227017984, 4294967040,
-    3323068416, 4294836224,
-    4026531840, 4026531840,
-    4294967295, 0
-};
-
-void init_addrgen(struct AddressGenerator *addr_gen) {
     addr_gen->finished = false;
-    addr_gen->state = ADDRGEN_INITIAL_STATE;
+    addr_gen->state = 0;
+
+    int sz = 64;
+    addr_gen->exclude_prefixes= malloc(sz * sizeof(uint32_t));
+    addr_gen->exclude_masks = malloc(sz * sizeof(uint32_t));
+
+    // Read excluded subnets list
+    FILE *fp = fopen("exclude.txt", "r");
+    if(fp == NULL) {
+        perror("failed to read exclude.txt");
+        return 1;
+    }
+
+    char line[32];
+    int octets[4];
+    int prefixLen;
+    int idx = 0;
+    while(fgets(line, sizeof(line), fp)) {
+        if(sscanf(line, "%d.%d.%d.%d/%d", octets, octets + 1, octets + 2, octets + 3, &prefixLen) == 5) {
+            addr_gen->exclude_prefixes[idx] = (uint32_t)(octets[0] & 0xff) << 24 | (uint32_t)(octets[1] & 0xff) << 16 | (uint32_t)(octets[2] & 0xff) << 8 | (uint32_t)(octets[3] & 0xff);
+            addr_gen->exclude_masks[idx] = ~((uint32_t)0xffffffff >> prefixLen);
+            idx++;
+            if(idx > sz) {
+                addr_gen->exclude_prefixes = realloc(addr_gen->exclude_prefixes, sz * 2 * sizeof(uint32_t));
+                addr_gen->exclude_masks =  realloc(addr_gen->exclude_masks, sz * 2 * sizeof(uint32_t));
+            }
+        }
+    }
+
+    addr_gen->num_excluded_subnets = idx;
+    fclose(fp);
+    return 0;
+
 }
 
-int should_exclude(uint32_t addr) {
-    for(int i = 0; i < 15; i += 2) {
-        if((addr & excluded_subnets[i + 1]) == excluded_subnets[i]) {
+int should_exclude(struct AddressGenerator *addr_gen, uint32_t addr) {
+    for(int i = 0; i < addr_gen->num_excluded_subnets; i++) {
+        if((addr & addr_gen->exclude_masks[i]) == addr_gen->exclude_prefixes[i]) {
             return 1;
         }
     }
@@ -42,15 +56,12 @@ in_addr_t next_address(struct AddressGenerator *addr_gen) {
         return 0;
     }
 
+    // Iterate through values 0..2^32-1 using an LCG such that each value is visited exactly once
     do {
-
-        /* We iterate through values {0..2^32-1} using an LCG; the parameters
-           are chosen so that each value will be visited exactly once. */
         addr_gen->state = addr_gen->state * 1664525 + 1013904223;
-    
-    } while(should_exclude(addr_gen->state));
+    } while(should_exclude(addr_gen, addr_gen->state));
 
-    if(addr_gen->state == ADDRGEN_INITIAL_STATE) {
+    if(addr_gen->state == 0) {
         addr_gen->finished = true;
     }
 
