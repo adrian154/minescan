@@ -35,7 +35,7 @@ const unsigned char ping_payload[] = {
 };
 
 // Maximum number of epoll events that we try to process simultaneously
-#define EPOLL_MAX_EVENTS 64
+#define EPOLL_MAX_EVENTS 10000
 
 // Limit on response size from server
 #define MAX_RESPONSE_SIZE 65536
