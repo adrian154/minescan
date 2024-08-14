@@ -41,15 +41,18 @@ const unsigned char ping_payload[] = {
 #define MAX_RESPONSE_SIZE 65536
 
 // Number of sockets to open at a time
-#define MAX_SOCKETS 4000
+#define MAX_SOCKETS 10000
 
 // Client port used for outgoing connections
 #define CLIENT_PORT 12345
 
+int servers_found = 0;
+int addresses_searched = 0;
+
 int setup_db(sqlite3 **db, sqlite3_stmt **stmt) {
     
     // set up sqlite3 database
-    int result = sqlite3_open("results.db", db);
+    int result = sqlite3_open("scan.db", db);
     if(result != SQLITE_OK) {
         fprintf(stderr, "failed to open database: %s\n", sqlite3_errstr(result));
         sqlite3_close(*db);
@@ -154,6 +157,7 @@ int add_socket(int epoll_fd, int client_port, in_addr_t addr, int *num_tracked_f
     }
 
     (*num_tracked_fds)++;
+    addresses_searched++;
     return 0;
 
 }
@@ -174,7 +178,8 @@ void parse_packet(struct SocketState *state, sqlite3_stmt *stmt) {
         return;
     }
 
-    printf("found a server on %s\n", addr_str);
+    servers_found++;
+    printf("found a server on %s; servers found: %d, addresses searched: %d\n", addr_str, servers_found, addresses_searched);
 
     // FIXME: Check bind calls for errors
     sqlite3_bind_text(stmt, 1, addr_str,  -1, SQLITE_TRANSIENT);
@@ -197,6 +202,9 @@ void close_socket(struct SocketState *state, int *num_tracked_fds) {
 }
 
 int main(void) {
+
+    // print info about compiled settings
+    printf("EPOLL_MAX_EVENTS=%d, MAX_RESPONSE_SIZE=%d, MAX_SOCKETS=%d, CLIENT_PORT=%d\n", EPOLL_MAX_EVENTS, MAX_RESPONSE_SIZE, MAX_SOCKETS, CLIENT_PORT);
 
     sqlite3 *db;
     sqlite3_stmt *stmt;
@@ -302,7 +310,7 @@ int main(void) {
 
                     }
 
-                    // Reject packets with nonsense packet length
+                    // Reject packets of abnormal length
                     if(packet_length == 0 || packet_length > MAX_RESPONSE_SIZE) {
                         close_socket(state, &num_tracked_fds);
                         continue;
